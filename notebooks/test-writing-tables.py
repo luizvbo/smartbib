@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.11.5
+#       jupytext_version: 1.11.4
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -25,21 +25,26 @@
 # + tags=[]
 import os
 import sys
+PATH_S2 = os.path.abspath('../../s2cholar')
 PATH_TR = os.path.abspath('..')
-if PATH_TR not in sys.path:
-    sys.path.append(PATH_TR)
+for path in (PATH_S2, PATH_TR):
+    if path not in sys.path:
+        sys.path.append(path)
 
-
+from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from top_research.model import (
     create_tables, Paper, ExternalId, Author, FieldOfStudy, Intent, 
-    PaperAuthor, PaperFOS, PaperIntent, PaperReferences, Context
+    PaperAuthor, PaperIntent, PaperReferences, Context,
+#     PaperFOS,
 )
 import s2cholar as s2
 from typing import Optional
 
 # + tags=[]
+# !rm ../data/data.db
+
 abs_path = os.path.abspath('../data/data.db')
 engine = create_engine(f'sqlite:///{abs_path}', echo=True)
 
@@ -52,11 +57,38 @@ if not os.path.exists(abs_path):
     create_tables(engine)
 
 # + tags=[]
-dir(Paper)
+paper = Paper(
+    id_ = 'abc',
+    is_influential = True,
+    url = 'www.google.com',
+    title = 'Google',
+    abstract = 'Search Engine',
+    venue = 'SV',
+    year = 2000,
+    reference_count = 1,
+    citation_count = 2,
+    influential_citation_count = 0,
+    is_open_access = False,
+    retrieved_at = datetime.now(),
+    citations_retrieved_at = None,
+)
+# session.add(paper)
 
 # + tags=[]
-from datetime import datetime
+paper.fields_of_study = [FieldOfStudy(text='ML'), FieldOfStudy(text='NLP')]
+# -
 
+session.add(paper)
+session.commit()
+
+# + tags=[]
+
+
+# + tags=[]
+intents = [Intent(text='a'), Intent(text='b')]
+
+
+# + tags=[]
 def add_or_update_paper(paper: Paper, session):
     paper_query = (
         session.query(Paper)
@@ -99,45 +131,48 @@ def insert_paper(
     )
     
     for source, ext_id in full_paper.external_ids.items():
-        session_add(session,
+        session.add(
             ExternalId(
                 id_paper=full_paper.paper_id, source=source, ext_id=ext_id
             )
         )
 
     for text in getattr(full_paper, 'contexts', []):
-        session_add(session,
+        session.add(
             Context(id_paper=full_paper.paper_id, text=text)
         )
     if hasattr(full_paper, 'intents'):
+        intent_text = {
+            intent.text for intent in 
+            session.query(Intent)
+            .filter(Intent.text.in_(full_paper.intents)).all()
+        }
+        for intent in full_paper.intents: 
+            if intent not in intents_text:
+                session.add(Intent(text=intent))
         intents = (
             session.query(Intent)
             .filter(Intent.text.in_(full_paper.intents)).all()
-        )
-        intents_text = {intent.text for intent in intents}
-        for intent in full_paper.intents: 
-            if intent not in intents_text:
-                new_intent = Intent(text=intent)
-                session_add(session,new_intent)
-                intents.append(new_intent)
+        )       
         for intent in intents:
-            session_add(session,
+            session.add(
                 PaperIntent(
                     id_paper=full_paper.paper_id, id_intent=intent.id_
                 )
             )
     
-    fos = (
+    fos_text = {
+        field.text for field in 
         session.query(FieldOfStudy)
-        .filter(FieldOfStudy.text.in_(full_paper.fields_of_study))
-        .all()
-    )
-    fos_text = {field.text for field in fos}
+        .filter(FieldOfStudy.text.in_(full_paper.fields_of_study)).all()
+    }
     for field in full_paper.fields_of_study:
         if field not in fos_text:
-            new_fos = FieldOfStudy(text=field)
-            session_add(session,new_fos)
-            fos.append(new_fos)
+            session.add(FieldOfStudy(text=field))
+    fos = (
+       session.query(FieldOfStudy)
+       .filter(FieldOfStudy.text.in_(full_paper.fields_of_study)).all()
+    ) 
     for field in fos:
         print('FOS', field.id_)
         session_add(session,
@@ -156,21 +191,20 @@ def insert_paper(
     for author in full_paper.authors:
         if author['authorId'] not in author_ids:
             new_author = Author(id_=author['authorId'], name=author['name'])
-            session_add(session,new_author)
+            session.add(new_author)
             authors.append(new_author)
     for author in authors:
-        session_add(session,
+        session.add(
             PaperAuthor(
                 id_paper=full_paper.paper_id, id_author=author.id_
             )
         )
     if cited_paper:
-        session_add(session,
+        session.add(
             PaperReferences(
                 id_citer=full_paper.paper_id, id_cited=cited_paper
             )
         )
-        
     session.commit()
 
 
@@ -178,19 +212,50 @@ def insert_paper(
 insert_paper(res_paper[0], retreived_at=datetime.now())
 
 # + tags=[]
+res_citers = s2_api.get_paper_citations(seed_paper_id, limit=1000)
+
+# + tags=[]
+res_citers[0].next
+
+# + tags=[]
+res_citers1 = s2_api.get_paper_citations(seed_paper_id, offset=0, limit=1000)
+# res_citers2 = s2_api.get_paper_citations(seed_paper_id, offset=1000, limit=1000)
+
+# + tags=[]
+res_citers1[0].next, res_citers2[0].next
+
+
+# -
+
+def get_citations(paper_id):
+    offset = 0
+    res_citers = s2_api.get_paper_citations(seed_paper_id, limit=1000)
+    if res_citers[1] == 200:
+
 
 
 # + tags=[]
-seed_paper_id = 'df2b0e26d0599ce3e70df8a9da02e51594e0e992'
-
 client = s2.ApiClient()
 s2_api = s2.PaperApi(client)
-res_paper = s2_api.get_paper(seed_paper_id)
 
-full_paper = res_paper[0]
+#BERT seed_paper_id = 'df2b0e26d0599ce3e70df8a9da02e51594e0e992'
+seed_paper_id = 'dbf88163f980441126bcae60b1abef6564414262'
+
+
+res_paper = s2_api.get_paper(seed_paper_id)
+if res_paper[1] == 200:
+    insert_paper(
+        res_paper[0], retreived_at=datetime.now()
+    )
+    res_citers = s2_api.get_paper_citations(seed_paper_id, limit=1000)
+
 
 # + tags=[]
-if res_paper[1] == 200:
+
+
+
+# + tags=[]
+
     res_paper[0]
 
 # + tags=[]
