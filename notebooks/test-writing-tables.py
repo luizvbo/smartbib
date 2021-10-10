@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.11.4
+#       jupytext_version: 1.11.5
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -35,8 +35,9 @@ from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from top_research.model import (
-    create_tables, Paper, ExternalId, Author, FieldOfStudy, Intent, 
-    PaperAuthor, PaperIntent, PaperReferences, Context,
+    create_tables, Paper, 
+    ExternalId, Author, FieldOfStudy, Intent, 
+    PaperAuthor, PaperIntent, Context,
 #     PaperFOS,
 )
 import s2cholar as s2
@@ -57,7 +58,7 @@ if not os.path.exists(abs_path):
     create_tables(engine)
 
 # + tags=[]
-paper = Paper(
+paper_1 = Paper(
     id_ = 'abc',
     is_influential = True,
     url = 'www.google.com',
@@ -70,22 +71,45 @@ paper = Paper(
     influential_citation_count = 0,
     is_open_access = False,
     retrieved_at = datetime.now(),
-    citations_retrieved_at = None,
+    citations_retrieved_at = None
+)
+
+paper_2 = Paper(
+    id_ = 'def',
+    is_influential = True,
+    url = 'www.uol.com',
+    title = 'Uol',
+    abstract = 'Univ. Online',
+    venue = 'BR',
+    year = 1995,
+    reference_count = 10,
+    citation_count = 3,
+    influential_citation_count = 1,
+    is_open_access = True,
+    retrieved_at = datetime.now(),
+    citations_retrieved_at = None
 )
 # session.add(paper)
 
 # + tags=[]
-paper.fields_of_study = [FieldOfStudy(text='ML'), FieldOfStudy(text='NLP')]
+paper_1.references = [paper_2]
 # -
 
-session.add(paper)
+
+
+# + tags=[]
+# paper.fields_of_study = [FieldOfStudy(text='ML'), FieldOfStudy(text='NLP')]
+
+# + tags=[]
+session.add(paper_1)
+session.add(paper_2)
 session.commit()
 
 # + tags=[]
-
+intents = [Intent(text='a'), Intent(text='b')]
 
 # + tags=[]
-intents = [Intent(text='a'), Intent(text='b')]
+session.query()
 
 
 # + tags=[]
@@ -107,105 +131,6 @@ def add_or_update_paper(paper: Paper, session):
         session.add(paper)
         
 
-def insert_paper(
-    full_paper: s2.FullPaper, retreived_at: datetime, 
-    citations_retrieved_at: Optional[datetime] = None,
-    cited_paper: Optional[str] = None
-):
-    add_or_update_paper(
-        Paper(
-            id_ = full_paper.paper_id,
-            is_influential = getattr(full_paper, 'is_influential', None),
-            url = full_paper.url,
-            title = full_paper.title,
-            abstract = full_paper.abstract,
-            venue = full_paper.venue,
-            year = full_paper.year,
-            reference_count = full_paper.reference_count,
-            citation_count = full_paper.citation_count,
-            influential_citation_count = full_paper.influential_citation_count,
-            is_open_access = full_paper.is_open_access,
-            retrieved_at = retreived_at,
-            citations_retrieved_at = citations_retrieved_at
-        ), session
-    )
-    
-    for source, ext_id in full_paper.external_ids.items():
-        session.add(
-            ExternalId(
-                id_paper=full_paper.paper_id, source=source, ext_id=ext_id
-            )
-        )
-
-    for text in getattr(full_paper, 'contexts', []):
-        session.add(
-            Context(id_paper=full_paper.paper_id, text=text)
-        )
-    if hasattr(full_paper, 'intents'):
-        intent_text = {
-            intent.text for intent in 
-            session.query(Intent)
-            .filter(Intent.text.in_(full_paper.intents)).all()
-        }
-        for intent in full_paper.intents: 
-            if intent not in intents_text:
-                session.add(Intent(text=intent))
-        intents = (
-            session.query(Intent)
-            .filter(Intent.text.in_(full_paper.intents)).all()
-        )       
-        for intent in intents:
-            session.add(
-                PaperIntent(
-                    id_paper=full_paper.paper_id, id_intent=intent.id_
-                )
-            )
-    
-    fos_text = {
-        field.text for field in 
-        session.query(FieldOfStudy)
-        .filter(FieldOfStudy.text.in_(full_paper.fields_of_study)).all()
-    }
-    for field in full_paper.fields_of_study:
-        if field not in fos_text:
-            session.add(FieldOfStudy(text=field))
-    fos = (
-       session.query(FieldOfStudy)
-       .filter(FieldOfStudy.text.in_(full_paper.fields_of_study)).all()
-    ) 
-    for field in fos:
-        print('FOS', field.id_)
-        session_add(session,
-            PaperFOS(
-                id_paper=full_paper.paper_id, id_fos=field.id_
-            )
-        )
-    
-    authors = (
-        session.query(Author)
-        .filter(Author.id_.in_([
-            author['authorId'] for author in full_paper.authors
-        ])).all()
-    )
-    author_ids = {author.id_ for author in authors}
-    for author in full_paper.authors:
-        if author['authorId'] not in author_ids:
-            new_author = Author(id_=author['authorId'], name=author['name'])
-            session.add(new_author)
-            authors.append(new_author)
-    for author in authors:
-        session.add(
-            PaperAuthor(
-                id_paper=full_paper.paper_id, id_author=author.id_
-            )
-        )
-    if cited_paper:
-        session.add(
-            PaperReferences(
-                id_citer=full_paper.paper_id, id_cited=cited_paper
-            )
-        )
-    session.commit()
 
 
 # + tags=[]
