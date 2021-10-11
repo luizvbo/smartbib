@@ -27,14 +27,16 @@ def _papers_to_records(df):
     """
     return (
         df.reset_index().drop(
-            ['authors', 'inCitations', 'outCitations', 'sources',
-             'pdfUrls', 'pmid', 'fieldsOfStudy', 'magId'], axis=1
+            [
+                'authors', 'inCitations', 'sources', 'pdfUrls',
+                'pmid', 'fieldsOfStudy', 'magId', 'doi', 'doiUrl'
+            ], axis=1
         )
         .rename(
             columns=dict(
                 id='id_paper', paperAbstract='paper_abstract', s2Url='s2_url',
                 journalName='journal_name', journalVolume='journal_volume',
-                journalPages='journal_pages', doiUrl='doi_url'
+                journalPages='journal_pages'
             )
         )
         .to_dict(orient='records')
@@ -85,18 +87,8 @@ def _get_papers_db_id(db, conn, df):
 def _insert_citations(db, conn, df):
     s_id_in_citations = df.inCitations.explode().dropna()
     logger.debug(f"{s_id_in_citations.shape[0]} citations in the dataframe")
-    # Add all paper IDs referred in citations
-    insert_clause = db.insert(db.paper, ignore_dup=True)
-    records = [
-        {'id_paper': value} for value in s_id_in_citations.values
-    ]
-    for chunk in chunks(records):
-        conn.execute(insert_clause, chunk)
-    logger.debug("Paper IDs from citations inserted")
     # Get the paper IDs (from the DB) for all papers referred
-    paper_ids = np.unique(
-        np.concatenate((s_id_in_citations.values, df.index.values))
-    )
+    paper_ids = df.index.values
     res = []
     for chunk in chunks(paper_ids):
         select_clause = db.select_where_in(
