@@ -3,13 +3,7 @@ import numpy as np
 from smartbib.model import PaperDatabase
 from loguru import logger
 import fire
-
-CHUNK_SIZE = 5_000
-# TODO: Move this to utils
-def chunks(lst):
-    """Yield successive n-sized chunks from lst."""
-    for i in range(0, len(lst), CHUNK_SIZE):
-        yield lst[i:i + CHUNK_SIZE]
+from smartbib.utils import chunks
 
 
 def _papers_to_records(df):
@@ -27,10 +21,8 @@ def _papers_to_records(df):
     """
     return (
         df.reset_index().drop(
-            [
-                'authors', 'inCitations', 'sources', 'pdfUrls',
-                'pmid', 'fieldsOfStudy', 'magId', 'doi', 'doiUrl'
-            ], axis=1
+            ['authors', 'inCitations', 'sources', 'pdfUrls', 'fieldsOfStudy'],
+            axis=1
         )
         .rename(
             columns=dict(
@@ -42,36 +34,11 @@ def _papers_to_records(df):
         .to_dict(orient='records')
     )
 
-def _get_papers_for_update_or_insert(db, conn, df):
-    sel = db.select_where_in(
-        db.paper, 'id_paper', df.index, selected_columns=['id_paper']
-    )
-    res = conn.execute(sel)
-    ids_in_db = set([row[0] for row in res.fetchall()])
-
-    return {
-        'update': df[df.index.isin(ids_in_db)],
-        'insert': df[~df.index.isin(ids_in_db)]
-    }
-
 def _insert_papers(db, conn, df):
-    dict_df = _get_papers_for_update_or_insert(db, conn, df)
-    logger.debug(
-        "{up} papers to update and {ins} papers to insert".format(
-            up=dict_df['update'].shape[0], ins=dict_df['insert'].shape[0]
-        )
-    )
-    # Update papers
-    records = _papers_to_records(dict_df['update'])
-    res = []
-    for record in records:
-        update_clause = db.update_where_equal(
-            db.paper, 'id_paper', record['id_paper'], record
-        )
-        res.append(conn.execute(update_clause))
+    logger.debug(f"{df.shape[0]} papers to insert")
     # Insert papers
     insert_clause = db.insert(db.paper)
-    records = _papers_to_records(dict_df['insert'])
+    records = _papers_to_records(df)
     for chunk in chunks(records):
         conn.execute(insert_clause, chunk)
     logger.debug("Papers up/inserted")
@@ -85,39 +52,25 @@ def _get_papers_db_id(db, conn, df):
     return pd.DataFrame(res, columns=['id_db', 'id']).set_index('id')
 
 def _insert_citations(db, conn, df):
-    s_id_in_citations = df.inCitations.explode().dropna()
-    logger.debug(f"{s_id_in_citations.shape[0]} citations in the dataframe")
-    # Get the paper IDs (from the DB) for all papers referred
-    paper_ids = df.index.values
-    res = []
-    for chunk in chunks(paper_ids):
-        select_clause = db.select_where_in(
-            db.paper, 'id_paper',
-            # Get all papers from citations and from the dataframe
-            chunk,
-            selected_columns=['id', 'id_paper']
-        )
-        res.extend(conn.execute(select_clause).fetchall())
+    df_citations = df.inCitations.explode().dropna().to_frame()
+    logger.debug(f"{df_citations.shape[0]} citations in the dataframe")
 
-    #  import pickle
-    #  pickle.dump(res, open('/tmp/debug.pickle', 'wb'))
-
-    df_db_papers = pd.DataFrame(res, columns=['id_db', 'id']).set_index('id')
-    # Update the dataframe with the DB IDs
-    df = (
-        df.merge(df_db_papers, left_index=True, right_index=True, how='inner')
-        .reset_index(drop=False).set_index('id_db')
-    )
     # Convert the dataframe into records
     records = (
-        df.inCitations.explode().dropna().to_frame()
-        .merge(
-            df_db_papers, right_index=True, left_on='inCitations'
+        df_citations
+        .pipe(
+            lambda df: pd.DataFrame(
+                df.inCitations.tolist(), index=df.index
+            )
         )
-        .rename(columns={'id_db': 'id_citer'})
-        .drop('inCitations', axis=1)
-        .reset_index(drop=False)
-        .rename(columns={'id_db': 'id_cited'})
+        .rename(columns=lambda s: s+'_')
+        .reset_index()
+        .set_axis(
+            [
+                f"id_{x}_{y}" for x in ('cited', 'citer')
+                for y in range(1, 4)
+            ], axis='columns'
+        )
         .to_dict(orient='records')
     )
     insert_clause = db.insert(db.citation)
@@ -132,7 +85,10 @@ def _insert_fos(db, conn, df):
     records = (
         df.fieldsOfStudy.explode().dropna()
         .reset_index(drop=False)
-        .rename(columns={'id_db': 'id_paper', 'fieldsOfStudy': 'content'})
+        .set_axis(
+            ['id_paper_1', 'id_paper_2', 'id_paper_3', 'content'],
+            axis='columns'
+        )
         .to_dict(orient='records')
     )
     # Insert the data
@@ -144,8 +100,12 @@ def _insert_fos(db, conn, df):
 def _insert_pdf_urls(db, conn, df):
     # Prepare the records
     records = (
-        df.pdfUrls.explode().dropna().reset_index(drop=False)
-        .rename(columns={'id_db': 'id_paper', 'pdfUrls': 'content'})
+        df.pdfUrls.explode().dropna()
+        .reset_index(drop=False)
+        .set_axis(
+            ['id_paper_1', 'id_paper_2', 'id_paper_3', 'content'],
+            axis='columns'
+        )
         .to_dict(orient='records')
     )
     # Insert the data
@@ -157,48 +117,21 @@ def _insert_pdf_urls(db, conn, df):
 def _insert_authors(db, conn, df):
     # Explode the authors column and convert the dictionary into columns
     df_authors = (
-        df.authors.explode().dropna().apply(
-            lambda d: (int(d['ids'][0]) if len(d['ids'])==1 else -1, d['name'])
-        )
-        .pipe(
-            lambda s: pd.DataFrame(
-                s.tolist(), index=s.index, columns=['id_author', 'name']
-            )
+        df.authors.explode().dropna()
+        .pipe(lambda s: pd.DataFrame(s.tolist(), index=s.index))
+        .reset_index(drop=False)
+        .set_axis(
+            ['id_paper_1', 'id_paper_2', 'id_paper_3', 'id_author', 'name'],
+            axis='columns'
         )
     )
+    logger.debug(f"{df_authors.shape[0]} authors in the dataframe")
     # Insert the data
     insert_clause = db.insert(db.author, ignore_dup=True)
     records = df_authors.to_dict(orient='records')
     for chunk in chunks(records):
         conn.execute(insert_clause, chunk)
     logger.debug("Authors inserted")
-
-    # Get the author IDs already in the DB
-    select_clause = db.select_where_in(
-        db.author, 'id_author',
-        # Get all papers from citations and from the dataframe
-        df_authors.id_author.values,
-        selected_columns=['id', 'id_author']
-    )
-    res = conn.execute(select_clause)
-
-    df_db_authors = (
-        pd.DataFrame(res, columns=['id', 'id_author']).set_index('id_author')
-    )
-    # Generate the records
-    records = (
-        df_authors.merge(
-            df_db_authors, right_index=True, left_on='id_author', how='left'
-        )
-        .reset_index(drop=False).drop(['id_author', 'name'], axis=1)
-        .rename(columns={'id_db': 'id_paper', 'id': 'id_author'})
-        .to_dict(orient='records')
-    )
-    # Insert the data
-    insert_clause = db.insert(db.authorship)
-    for chunk in chunks(records):
-        conn.execute(insert_clause, chunk)
-    logger.debug("Authorships inserted")
 
 
 def write_s2_data_to_db(df, engine):
