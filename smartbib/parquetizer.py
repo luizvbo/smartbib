@@ -2,11 +2,48 @@ import fire
 from glob import glob
 from loguru import logger
 import pandas as pd
+import numpy as np
 import gzip
 import os
 from typing import Optional
 from tqdm.auto import tqdm
+from smartbib.utils import id_str_to_int
+import pyarrow as pa
 
+
+PARQUET_SCHEMA = pa.schema([
+    ('title', pa.string()),
+    ('paperAbstract', pa.string()),
+    (
+        'authors', pa.list_(
+            pa.struct([
+                ('id_author', pa.int32()),
+                ('name', pa.string())
+            ])
+        )
+    ),
+    (
+        'inCitations', pa.list_(
+            pa.struct([
+                ('id_1', pa.uint64()),
+                ('id_2', pa.uint64()),
+                ('id_3', pa.uint32())
+            ])
+        )
+    ),
+    ('year', pa.int16()),
+    ('s2Url', pa.string()),
+    ('sources', pa.list_(pa.string())),
+    ('pdfUrls', pa.list_(pa.string())),
+    ('venue', pa.string()),
+    ('journalName', pa.string()),
+    ('journalVolume', pa.string()),
+    ('journalPages', pa.string()),
+    ('fieldsOfStudy', pa.list_(pa.string())),
+    ('id_1', pa.uint64()),
+    ('id_2', pa.uint64()),
+    ('id_3', pa.uint32())
+])
 
 def read_json_gzip(path_file):
     with gzip.open(path_file, 'r') as file:
@@ -15,11 +52,50 @@ def read_json_gzip(path_file):
             # Drop deprecated fields (see api.semanticscholar.org/corpus)
             # and other unused columns
             .drop(
-                ['entities', 's2PdfUrl', 'doi', 'doiUrl', 'pmid', 'magId'],
+                [
+                    'entities', 's2PdfUrl', 'doi', 'doiUrl',
+                    'pmid', 'magId', 'outCitations'
+                ],
                 axis=1
             )
+            .pipe(
+                lambda df: df.assign(
+                    **{
+                        col: values for col, values in
+                        # Convert hash IDs into 3 integers
+                        df['id'].apply(id_str_to_int)
+                        # Convert the output into a dataframe
+                        .pipe(
+                            lambda s: pd.DataFrame(
+                                s.tolist(), columns=['id_1', 'id_2', 'id_3']
+                            )
+                        )
+                        # Iterate over the columns
+                        .iteritems()
+                    }
+                )
+            )
+            .drop('id', axis=1)
+            .assign(
+                # Convert hash IDs into integers
+                inCitations=lambda df: df.inCitations.apply(
+                    lambda el: [id_str_to_int(id_str) for id_str in el]
+                ),
+                # Convert the year to int16
+                year=lambda df: df.year.fillna(-1).astype(np.int16),
+                # Convert the authors
+                authors=lambda df: df.authors.apply(
+                    lambda list_authors: [
+                        (
+                            int(aut['ids'][0]) if len(aut['ids'])==1 else -1,
+                            aut['name']
+                        )
+                        for aut in list_authors
+                    ]
+                )
+            )
             # Use the id column as index
-            .set_index('id')
+            .set_index(['id_1', 'id_2', 'id_3'])
         )
         logger.debug(f"File loaded: '{path_file}'")
     return df_data
@@ -31,7 +107,7 @@ def store_parquet(df, path_file, output_folder=None):
     path_file = path_file[:-3] if path_file.endswith('.gz') else path_file
     path_file = os.path.basename(path_file)
     path_parquet = os.path.join(output_folder, path_file + '.parquet')
-    df.to_parquet(path_parquet)
+    df.to_parquet(path_parquet, engine='pyarrow', schema=PARQUET_SCHEMA)
     logger.debug(f"File stored as parquet: '{path_parquet}'")
 
 
@@ -67,6 +143,10 @@ def process_folder(
             in a different location.
     """
     file_list = glob(input_path_pattern)
+    logger.debug(
+        f"Loading files from '{input_path_pattern}'. "
+        f"{len(file_list)} files found"
+    )
     if n_jobs != 1:
         from multiprocessing import Pool, cpu_count
         assert n_jobs > 0 or n_jobs == -1, 'Inconsistent n_jobs'
