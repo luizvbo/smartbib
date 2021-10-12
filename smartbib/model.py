@@ -2,7 +2,7 @@ from sqlalchemy import (
     Table, String, Text, Integer, Column, ForeignKey, MetaData
 )
 from sqlalchemy.schema import ForeignKeyConstraint
-from sqlalchemy.dialects.mysql import insert, INTEGER, BIGINT
+from sqlalchemy.dialects.mysql import insert, INTEGER, BINARY
 from sqlalchemy.sql import select, update
 
 
@@ -19,9 +19,7 @@ class PaperDatabase:
     def _gen_table_paper(self):
         return Table(
             'papers', self.metadata_obj,
-            Column('id_1', BIGINT(unsigned=True), primary_key=True),
-            Column('id_2', BIGINT(unsigned=True), primary_key=True),
-            Column('id_3', INTEGER(unsigned=True), primary_key=True),
+            Column('id_', BINARY(20), primary_key=True),
             Column('title', String(512)),
             Column('paper_abstract', Text),
             Column('year', Integer),
@@ -35,28 +33,15 @@ class PaperDatabase:
     def _gen_table_pdf_url(self):
         return Table(
             'pdf_urls', self.metadata_obj,
-            Column('id_paper_1', BIGINT(unsigned=True)),
-            Column('id_paper_2', BIGINT(unsigned=True)),
-            Column('id_paper_3', INTEGER(unsigned=True)),
-            Column('content', Text),
-            ForeignKeyConstraint(
-                ['id_paper_1', 'id_paper_2', 'id_paper_3'],
-                ['papers.id_1', 'papers.id_2', 'papers.id_3']
-            )
+            Column('id_paper', BINARY(20), ForeignKey('papers.id_')),
+            Column('content', Text)
         )
 
     def _gen_table_fos(self):
         return Table(
             'fields_of_study', self.metadata_obj,
-            Column('id_paper_1', BIGINT(unsigned=True)),
-            Column('id_paper_2', BIGINT(unsigned=True)),
-            Column('id_paper_3', INTEGER(unsigned=True)),
-            Column('content', String(40)),
-            ForeignKeyConstraint(
-                ['id_paper_1', 'id_paper_2', 'id_paper_3'],
-                ['papers.id_1', 'papers.id_2', 'papers.id_3']
-            )
-
+            Column('id_paper', BINARY(20), ForeignKey('papers.id_')),
+            Column('content', String(40))
         )
 
     def _gen_table_author(self):
@@ -64,42 +49,15 @@ class PaperDatabase:
             'authors', self.metadata_obj,
             Column('id_author', Integer),
             Column('name', String(256)),
-            Column('id_paper_1', BIGINT(unsigned=True)),
-            Column('id_paper_2', BIGINT(unsigned=True)),
-            Column('id_paper_3', INTEGER(unsigned=True)),
-            ForeignKeyConstraint(
-                ['id_paper_1', 'id_paper_2', 'id_paper_3'],
-                ['papers.id_1', 'papers.id_2', 'papers.id_3']
-            )
+            Column('id_paper', BINARY(20), ForeignKey('papers.id_'))
         )
 
-    #  def _gen_table_authorship(self):
-    #      return Table(
-    #          'authorship', self.metadata_obj,
-    #          Column('id_author', Integer, ForeignKey('authors.id')),
-    #          Column('id_paper_1', BIGINT(unsigned=True)),
-    #          Column('id_paper_2', BIGINT(unsigned=True)),
-    #          Column('id_paper_3', INTEGER(unsigned=True)),
-    #          ForeignKeyConstraint(
-    #              ['id_paper_1', 'id_paper_2', 'id_paper_3'],
-    #              ['papers.id_1', 'papers.id_2', 'papers.id_3']
-    #          )
-    #
-    #      )
 
     def _gen_table_citation(self):
         return Table(
             'citations', self.metadata_obj,
-            Column('id_cited_1', BIGINT(unsigned=True)),
-            Column('id_cited_2', BIGINT(unsigned=True)),
-            Column('id_cited_3', INTEGER(unsigned=True)),
-            Column('id_citer_1', BIGINT(unsigned=True)),
-            Column('id_citer_2', BIGINT(unsigned=True)),
-            Column('id_citer_3', INTEGER(unsigned=True)),
-            ForeignKeyConstraint(
-                ['id_cited_1', 'id_cited_2', 'id_cited_3'],
-                ['papers.id_1', 'papers.id_2', 'papers.id_3']
-            )
+            Column('id_cited', BINARY(20), ForeignKey('papers.id_')),
+            Column('id_citer', BINARY(20))
         )
 
 

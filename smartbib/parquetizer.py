@@ -7,7 +7,7 @@ import gzip
 import os
 from typing import Optional
 from tqdm.auto import tqdm
-from smartbib.utils import id_str_to_int
+from smartbib.utils import id_str_to_bytes
 import pyarrow as pa
 
 
@@ -22,15 +22,7 @@ PARQUET_SCHEMA = pa.schema([
             ])
         )
     ),
-    (
-        'inCitations', pa.list_(
-            pa.struct([
-                ('id_1', pa.uint64()),
-                ('id_2', pa.uint64()),
-                ('id_3', pa.uint32())
-            ])
-        )
-    ),
+    ('inCitations', pa.list_(pa.binary())),
     ('year', pa.int16()),
     ('s2Url', pa.string()),
     ('sources', pa.list_(pa.string())),
@@ -40,9 +32,7 @@ PARQUET_SCHEMA = pa.schema([
     ('journalVolume', pa.string()),
     ('journalPages', pa.string()),
     ('fieldsOfStudy', pa.list_(pa.string())),
-    ('id_1', pa.uint64()),
-    ('id_2', pa.uint64()),
-    ('id_3', pa.uint32())
+    ('id_', pa.binary())
 ])
 
 def read_json_gzip(path_file):
@@ -58,28 +48,12 @@ def read_json_gzip(path_file):
                 ],
                 axis=1
             )
-            .pipe(
-                lambda df: df.assign(
-                    **{
-                        col: values for col, values in
-                        # Convert hash IDs into 3 integers
-                        df['id'].apply(id_str_to_int)
-                        # Convert the output into a dataframe
-                        .pipe(
-                            lambda s: pd.DataFrame(
-                                s.tolist(), columns=['id_1', 'id_2', 'id_3']
-                            )
-                        )
-                        # Iterate over the columns
-                        .iteritems()
-                    }
-                )
-            )
-            .drop('id', axis=1)
             .assign(
+                # Convert the id to bytes
+                id_=lambda df: df['id'].apply(id_str_to_bytes),
                 # Convert hash IDs into integers
                 inCitations=lambda df: df.inCitations.apply(
-                    lambda el: [id_str_to_int(id_str) for id_str in el]
+                    lambda el: [id_str_to_bytes(id_str) for id_str in el]
                 ),
                 # Convert the year to int16
                 year=lambda df: df.year.fillna(-1).astype(np.int16),
@@ -87,15 +61,16 @@ def read_json_gzip(path_file):
                 authors=lambda df: df.authors.apply(
                     lambda list_authors: [
                         (
-                            int(aut['ids'][0]) if len(aut['ids'])==1 else -1,
+                            int(aut['ids'][0]) if len(aut['ids']) == 1 else -1,
                             aut['name']
                         )
                         for aut in list_authors
                     ]
                 )
             )
+            .drop('id', axis=1)
             # Use the id column as index
-            .set_index(['id_1', 'id_2', 'id_3'])
+            .set_index(['id_'])
         )
         logger.debug(f"File loaded: '{path_file}'")
     return df_data

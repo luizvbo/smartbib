@@ -1,8 +1,8 @@
 import pandas as pd
-import numpy as np
 from smartbib.model import PaperDatabase
 from loguru import logger
 import fire
+from tqdm.auto import tqdm
 from smartbib.utils import chunks
 
 
@@ -43,14 +43,6 @@ def _insert_papers(db, conn, df):
         conn.execute(insert_clause, chunk)
     logger.debug("Papers up/inserted")
 
-def _get_papers_db_id(db, conn, df):
-    sel = db.select_where_in(
-        db.paper, 'id_paper', df.index, selected_columns=['id', 'id_paper']
-    )
-    res = conn.execute(sel)
-
-    return pd.DataFrame(res, columns=['id_db', 'id']).set_index('id')
-
 def _insert_citations(db, conn, df):
     df_citations = df.inCitations.explode().dropna().to_frame()
     logger.debug(f"{df_citations.shape[0]} citations in the dataframe")
@@ -58,19 +50,8 @@ def _insert_citations(db, conn, df):
     # Convert the dataframe into records
     records = (
         df_citations
-        .pipe(
-            lambda df: pd.DataFrame(
-                df.inCitations.tolist(), index=df.index
-            )
-        )
-        .rename(columns=lambda s: s+'_')
         .reset_index()
-        .set_axis(
-            [
-                f"id_{x}_{y}" for x in ('cited', 'citer')
-                for y in range(1, 4)
-            ], axis='columns'
-        )
+        .set_axis(['id_cited', 'id_citer'], axis='columns')
         .to_dict(orient='records')
     )
     insert_clause = db.insert(db.citation)
@@ -85,10 +66,7 @@ def _insert_fos(db, conn, df):
     records = (
         df.fieldsOfStudy.explode().dropna()
         .reset_index(drop=False)
-        .set_axis(
-            ['id_paper_1', 'id_paper_2', 'id_paper_3', 'content'],
-            axis='columns'
-        )
+        .set_axis(['id_paper', 'content'], axis='columns')
         .to_dict(orient='records')
     )
     # Insert the data
@@ -102,10 +80,7 @@ def _insert_pdf_urls(db, conn, df):
     records = (
         df.pdfUrls.explode().dropna()
         .reset_index(drop=False)
-        .set_axis(
-            ['id_paper_1', 'id_paper_2', 'id_paper_3', 'content'],
-            axis='columns'
-        )
+        .set_axis(['id_paper', 'content'], axis='columns')
         .to_dict(orient='records')
     )
     # Insert the data
@@ -120,10 +95,7 @@ def _insert_authors(db, conn, df):
         df.authors.explode().dropna()
         .pipe(lambda s: pd.DataFrame(s.tolist(), index=s.index))
         .reset_index(drop=False)
-        .set_axis(
-            ['id_paper_1', 'id_paper_2', 'id_paper_3', 'id_author', 'name'],
-            axis='columns'
-        )
+        .set_axis(['id_paper', 'id_author', 'name'], axis='columns')
     )
     logger.debug(f"{df_authors.shape[0]} authors in the dataframe")
     # Insert the data
@@ -144,7 +116,10 @@ def write_s2_data_to_db(df, engine):
         _insert_pdf_urls(db, conn, df)
         _insert_authors(db, conn, df)
 
-def write_data_to_db(path_data: str, path_config: str, path_credentials: str):
+
+def write_data_to_db(
+    path_data: str, path_config: str, path_credentials: str
+):
     """Load dataframes from parquet files and write to database
 
     Args:
@@ -170,14 +145,15 @@ def write_data_to_db(path_data: str, path_config: str, path_credentials: str):
             db=config['database']
         ), pool_timeout=300
     )
-    for path_parquet in glob(path_data):
+    file_list = glob(path_data)
+    logger.debug(
+        f"Loading files from '{path_data}'. {len(file_list)} files found"
+    )
+    for path_parquet in tqdm(file_list):
         logger.debug(f"Loading parquet file from {path_parquet}")
-        df = (
-            pd.read_parquet(path_parquet)
-            .assign(year=lambda df: df.year.fillna(-1))
-        )
+        df = (pd.read_parquet(path_parquet))
         write_s2_data_to_db(df, engine)
+
 
 if __name__ == "__main__":
     fire.Fire(write_data_to_db)
-
