@@ -25,12 +25,7 @@ PARQUET_SCHEMA = pa.schema([
     ('inCitations', pa.list_(pa.binary())),
     ('year', pa.int16()),
     ('s2Url', pa.string()),
-    ('sources', pa.list_(pa.string())),
-    ('pdfUrls', pa.list_(pa.string())),
     ('venue', pa.string()),
-    ('journalName', pa.string()),
-    ('journalVolume', pa.string()),
-    ('journalPages', pa.string()),
     ('fieldsOfStudy', pa.list_(pa.string())),
     ('id_', pa.binary())
 ])
@@ -44,7 +39,8 @@ def read_json_gzip(path_file):
             .drop(
                 [
                     'entities', 's2PdfUrl', 'doi', 'doiUrl',
-                    'pmid', 'magId', 'outCitations'
+                    'journalVolume', 'journalPages', 'pmid', 'magId',
+                    'sources', 'pdfUrls', 'outCitations'
                 ],
                 axis=1
             )
@@ -54,6 +50,11 @@ def read_json_gzip(path_file):
                 # Convert hash IDs into integers
                 inCitations=lambda df: df.inCitations.apply(
                     lambda el: [id_str_to_bytes(id_str) for id_str in el]
+                ),
+                # Get use the journalName when available, otherwise, use the
+                # value from venue
+                venue=lambda df: df['journalName'].where(
+                    df['journalName'] != '', df['venue']
                 ),
                 # Convert the year to int16
                 year=lambda df: df.year.fillna(-1).astype(np.int16),
@@ -68,7 +69,7 @@ def read_json_gzip(path_file):
                     ]
                 )
             )
-            .drop('id', axis=1)
+            .drop(['id', 'journalName'], axis=1)
             # Use the id column as index
             .set_index(['id_'])
         )
