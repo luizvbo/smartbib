@@ -5,10 +5,12 @@ import pandas as pd
 import numpy as np
 import gzip
 import os
+import pickle
 from typing import Optional
 from tqdm.auto import tqdm
 from smartbib.utils import id_str_to_bytes
 import pyarrow as pa
+from multiprocessing import Pool, cpu_count
 
 
 PARQUET_SCHEMA = pa.schema([
@@ -30,7 +32,7 @@ PARQUET_SCHEMA = pa.schema([
     ('id_', pa.binary())
 ])
 
-def read_json_gzip(path_file):
+def _read_json_gzip(path_file):
     with gzip.open(path_file, 'r') as file:
         df_data = (
             pd.read_json(file, lines=True)
@@ -124,7 +126,6 @@ def process_folder(
         f"{len(file_list)} files found"
     )
     if n_jobs != 1:
-        from multiprocessing import Pool, cpu_count
         assert n_jobs > 0 or n_jobs == -1, 'Inconsistent n_jobs'
         n_jobs = cpu_count() if n_jobs == -1 else n_jobs
         with Pool(n_jobs) as p:
@@ -134,15 +135,66 @@ def process_folder(
             )
     else:
         for file_path in tqdm(file_list):
-            df = read_json_gzip(file_path)
+            df = _read_json_gzip(file_path)
             store_parquet(df, file_path, output_folder)
 
 
 def _process_file(params):
     file_path, output_folder = params
-    df = read_json_gzip(file_path)
+    df = _read_json_gzip(file_path)
     store_parquet(df, file_path, output_folder)
 
 
+def _read_index_from_parquet(path_paquet):
+    return pd.read_parquet(path_paquet, columns=['id_'])
+
+
+def create_id_index(
+    path_pattern: str, path_index_output: str,
+    n_jobs: int = 1
+):
+    """Create a dictionary mapping int64 to int32.
+
+    The objective of keeping such index is to reduce the amount of memory used
+    to store the column and row indices in the co-citation matrix.
+
+    Args:
+        path_pattern: Pattern to the parquet files (GLOB-like)
+        path_index_output: Path to the place where the dictionary index is
+            stored.
+        n_jobs: Number of jobs to run in parallel.
+    """
+    def bytes_to_int(byte_str):
+        return int.from_bytes(byte_str[:8], byteorder='big')
+
+    file_list = glob(path_pattern)
+    logger.debug(
+        f"Loading files from '{path_pattern}'. "
+        f"{len(file_list)} files found"
+    )
+    index = {}
+    if n_jobs != 1:
+        assert n_jobs > 0 or n_jobs == -1, 'Inconsistent n_jobs'
+        n_jobs = cpu_count() if n_jobs == -1 else n_jobs
+        with Pool(n_jobs) as p:
+            for df in tqdm(
+                p.imap_unordered(_read_index_from_parquet, file_list),
+                total=len(file_list)
+            ):
+                for id_ in df.index:
+                    index[bytes_to_int(id_)] = len(index)
+                del df
+    else:
+        for path in tqdm(file_list):
+            df = pd.read_parquet(path, columns=['id_'])
+            for id_ in df.index:
+                index[bytes_to_int(id_)] = len(index)
+
+    with open(path_index_output, 'wb') as f:
+        pickle.dump(index, f)
+
 if __name__ == "__main__":
-    fire.Fire(process_folder)
+    fire.Fire(dict(
+        generate_parquet=process_folder,
+        create_id_index=create_id_index
+    ))
